@@ -1,0 +1,6 @@
+ssh_host: 192.168.86.184
+ssh_user: denni
+ssh_password: Dwade123q2
+db_user: dwq9172
+db_password: Dwade123q2
+database: music_sharing
