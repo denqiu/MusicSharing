@@ -417,20 +417,20 @@ class Adds(AddSql, Execute):
         AddSql.__init__(self, db, printText, debug, Execute)
         self.execute()
         
-    def execute(self, i=1):
+    def accounts(self, index):
         code = WriteSql()
         code.append("call insert_id_string2('account', username, password)")
         code.append("call insert_account_id_datetime1('account_date', now());")
         args = "in username varchar(255), in password varchar(255)"
-        i = self.createProcedure("add_account", args, code, i)
+        index = self.createProcedure("add_account", args, code, index)
         code.clear()
         code.append("set @user_id = get_account_id(username)")
         insert = "call insert_id_int1('admin', @user_id);"
         error = "call set_error(concat('No admin exists with user name ', username));"
         code.append("if get_admin_id(@user_id) < 1 then \n\t\t\t{}\n\t\telse\n\t\t\t{}\n\t\tend if;".format(insert, error))
         args = "in username varchar(255)"
-        i = self.createProcedure("add_admin", args, code, i)
-        return i
+        index = self.createProcedure("add_admin", args, code, index)
+        return index
     
 if __name__ == "__main__":
     db = Creates(printText=True, debug=True).db
