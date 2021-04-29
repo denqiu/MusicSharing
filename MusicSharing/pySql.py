@@ -76,8 +76,24 @@ class WriteSql:
         self.code = list(reversed(code))
         return self
     
+    def __cascade(self, what):
+        code = list(reversed(self.code))
+        for i, c in enumerate(code):
+            r = re.search("foreign key \(.*\) references .*", c)
+            if not r is None:
+                code[i] += " on {} cascade".format(what)
+        self.code = list(reversed(code))
+        return self
+    
+    def deleteCascade(self):
+        return self.__cascade("delete")
+    
+    def updateCascade(self):
+        return self.__cascade("update")
+    
     def clear(self):
         self.code.clear()
+        self.column_count = 0
         return self
     
     def __str__(self):
@@ -309,7 +325,8 @@ class PySql:
         try:
             self.cursor.callproc(procName, args)
             self.db.commit()
-            self.setArgs(*args).query(query)
+            if not query is None:
+                self.setArgs(*args).query(query)
         except con.Error as e:
             self.results = (self.__checkError(e.msg), None, None)
         return self
@@ -317,7 +334,8 @@ class PySql:
     def callFunction(self, query, *args):
         try:
             self.__function = True
-            self.setArgs(*args).query(query)
+            if not query is None:
+                self.setArgs(*args).query(query)
         except con.Error as e:
             self.results = (self.__checkError(e.msg), None, None)
         return self
@@ -384,6 +402,7 @@ class ExecuteSql:
         self.title = "\n".join((t, s+title, t))
         self.printText = printText
         self.debug = debug
+        self.maintainDatabase(False)
         print(self.title)
            
     def printResults(self, q, index = None):
@@ -445,40 +464,87 @@ class ExecuteSql:
         args = ", ".join([" ".join(a) for a in args])
         return self.createProcedure(name, args, prep, index)
     
+    def maintainDatabase(self, maintain):
+        self.isMaintained = maintain
+    
 class CreateSql(ExecuteSql):
+    VERTICAL_SCROLLBAR = "vertical"
+    HORIZONTAL_SCROLLBAR = "horizontal"
+    
+    MINIMIZED_WINDOW_STATE = "minimized_state"
+    MAXIMIZED_WINDOW_STATE = "maximized_state"
+    CLOSED_WINDOW_STATE = "closed_state"
+    RESTORED_WINDOW_STATE = "restored_state"
+    
     def __init__(self, db = None, printText = True, debug = False, execute = ExecuteSql):
         execute.__init__(self, "creates", db, printText, debug)
         
     def dropCreateDatabase(self, database = None):
         if not database is None:
+            if self.isMaintained:
+                self.db.showTables()
+                tables = self.db.results[2]
+                tables = [table["Tables_in_{}".format(self.db.db_name)] for table in tables]
+                tableRows = []
+                for t in tables:
+                    self.db.query("select * from {}".format(t))
+                    tableRows.append(self.db.results[2])
+                self.__backup = dict(zip(tables, tableRows))
             self.db.cursor.execute("drop database if exists {}".format(database))
             self.db.cursor.execute("create database {}".format(database))
             self.db.use(database, debug = False)
+            
+    def __maintainTable(self, table):
+        rows = self.__backup[table]
+        if len(rows) > 0:
+            for r in rows:
+                values = tuple(r.values())
+                questions = ", ".join(["%s"]*len(values))
+                query = "insert into {} values ({})".format(table, questions)
+                self.db.modify(query, *values)
+        self.db.query("select * from {}".format(table))
           
     def start(self):
-        q = "drop table if exists manage_columns"
+        table = "manage_columns"
+        q = "drop table if exists {}".format(table)
         self.db.cursor.execute(q)
         q = WriteSql().setNull(False)
         q.setColumns("varchar(255)", "table_name", "column_questions")
         q.setKeys("index", "table_name", "column_questions")
         q.separator = ",\n\t"
-        q = "create table manage_columns (\n\t{}\n) engine = INNODB".format(q)
+        q = "create table {} (\n\t{}\n) engine = INNODB".format(table, q)
         self.printResults(q, 1)
         self.db.cursor.execute(q)
+        if self.isMaintained:
+            self.__maintainTable(table)
         self.execute(2)
         
+    def createAndAddToManageColumns(self, table, code, foreign_checks, index):
+        index = self.createTable(table, code, False, foreign_checks, index)
+        self.addTableToManageColumns(table, code.column_count)
+        return index
+        
+    def addTableToManageColumns(self, table, column_count):
+        if not self.isMaintained:
+            self.db.modify("insert into manage_columns values ('{}', '{}')".format(table, ",".join(["?"] * column_count)))
+        return self
+        
     def manageTable(self, table, column_count, index):
-        q = "drop table if exists manage_{}".format(table)
+        manage = "manage_{}".format(table)
+        q = "drop table if exists {}".format(manage)
         self.db.cursor.execute(q)
         q = WriteSql().setDefault(0).setNull(False)
         q.setColumns("int", "new_id", "size")
         q.setKeys("index", "new_id", "size")
         q.separator = ",\n\t"
-        q = "create table manage_{} (\n\t{}\n) engine = INNODB".format(table, q)
+        q = "create table {} (\n\t{}\n) engine = INNODB".format(manage, q)
         self.printResults(q, index)
         self.db.cursor.execute(q)
-        self.db.modify("insert into manage_{} values ()".format(table))
-        self.db.modify("insert into manage_columns values ('{}', '{}')".format(table, ",".join(["?"] * column_count)))
+        if self.isMaintained:
+            self.__maintainTable(manage)
+        else:
+            self.db.modify("insert into {} values ()".format(manage))
+            self.addTableToManageColumns(table, column_count)
         return index + 1
     
     def createTable(self, table, code, manage, foreign_checks, index):
@@ -489,6 +555,8 @@ class CreateSql(ExecuteSql):
         q = "create table {} (\n\t{}\n) engine = INNODB".format(table, code)
         self.printResults(q, index)
         self.db.cursor.execute(q)
+        if self.isMaintained:
+            self.__maintainTable(table)
         if foreign_checks: self.db.setForeignKeyChecks(1)
         if manage: index = self.manageTable(table, code.column_count, index+1)
         return index
@@ -498,7 +566,61 @@ class CreateSql(ExecuteSql):
         code = WriteSql()
         code.setColumns("int", table_id)
         code.setNull(False)
-        return (table_id, code)
+        return (table_id, table, code)
+    
+    def setTracker(self, table, trackerColumn, columnType, defaultValue):
+        code = WriteSql()
+        code.setDefault(defaultValue).setNull(False)
+        code.setColumns(columnType, trackerColumn)
+        code.setKeys("index", trackerColumn)
+        return (table, code)
+    
+    def __getTrackers(self, what):
+        tk = vars(CreateSql)
+        trackers = {}
+        for t in list(tk.keys()).copy():
+            if what in t:
+                trackers[tk[t]] = t[:t.find('_')].lower()
+        return trackers
+        
+    def trackScroll(self, table, defaultValue, scrollBar = None):
+        code = WriteSql()
+        if isinstance(defaultValue, str):
+            defaultValue = int(defaultValue)
+        if not isinstance(defaultValue, int):
+            print("Default value must be a number.")
+            return (table, code)
+        code.setDefault(defaultValue).setNull(False)
+        trackScrolls = self.__getTrackers("SCROLLBAR")
+        if not scrollBar is None:
+            if scrollBar in trackScrolls:
+                trackScrolls = {scrollBar: trackScrolls[scrollBar]}
+        columns = tuple(trackScrolls.values())
+        code.setColumns("int", *columns)
+        code.setKeys("index", *columns)
+        return (table, code)
+    
+    def trackWindow(self, table, defaultValue, *windowStates):
+        code = WriteSql()
+        for c in (int, str):
+            if isinstance(defaultValue, c):
+                defaultValue = bool(defaultValue)
+                break
+        if not isinstance(defaultValue, bool):
+            print("Default value must be a boolean variable.")
+            return (table, code)
+        code.setDefault(defaultValue).setNull(False)
+        trackStates = self.__getTrackers("WINDOW")
+        if len(windowStates) > 0:
+            t = {}
+            for s in windowStates:
+                if s in trackStates:
+                    t[s] = trackStates[s]
+            trackStates = t
+        columns = tuple(trackStates.values())
+        code.setColumns("boolean", *columns)
+        code.setKeys("index", *columns)
+        return (table, code)
     
 class CheckSql(ExecuteSql):
     def __init__(self, db = None, printText = True, debug = False, execute = ExecuteSql):
@@ -524,20 +646,22 @@ class GetSql(ExecuteSql):
     def __init__(self, db = None, printText = True, debug = False, execute = ExecuteSql):
         execute.__init__(self, "gets", db, printText, debug)
         
-    def getId(self, table, args, where, index, fromTable = None):
+    def getId(self, table, args, where, index, fromTable = None, table_in_name = False):
         if fromTable is None:
             fromTable = table
         c = "{}_id".format(table)
         code = "return ifnull((select {} from {} where {}), 0);".format(c, fromTable, where)
+        if table_in_name:
+            c = "{}_{}".format(fromTable, c)
         return self.createFunction("get_{}".format(c), args, "int", code, index)
      
-    def get(self, table, returnType, column, column_in_name, get_from_id, index, whereTable = None):
+    def get(self, table, returnType, column, column_in_name, get_from_id, index, whereTable = None, functionName = None):
         if whereTable is None:
             whereTable = table
-        g = "get_{}".format(table)
-        name = "{}_{}".format(g, column) if column_in_name else g
+        g = "get_{}".format(table)    
+        name = "{}_{}".format(g, column) if column_in_name else g  
         if get_from_id:
-            code = "return get_{}({}_id(g));".format(column, name if column_in_name else g)
+            code = "return get_{}({}_id(g));".format(column if functionName is None else functionName, name if column_in_name else g)
         else:
             code = "return (select {} from {} where {}_id = g);".format(column, table, whereTable)
         return self.createFunction(name, "g int", returnType, code, index)
@@ -545,6 +669,12 @@ class GetSql(ExecuteSql):
 class TriggerSql(ExecuteSql):
     def __init__(self, db = None, printText = True, debug = False, execute = ExecuteSql):
         execute.__init__(self, "triggers", db, printText, debug)
+        
+    def codeEmptyCheck(self, check):
+        return "call check_empty('{0}', new.{0})".format(check)
+    
+    def codeIdCheck(self, check):
+        return "call check_id(new.{0}, '{0}')".format(check)
         
     def manageId(self, table, index):
         m = "manage_{}".format(table)
@@ -590,25 +720,32 @@ class TriggerSql(ExecuteSql):
 class PreparedInsertStatements(ExecuteSql):
     def __init__(self, db = None, printText = True, debug = False, execute = ExecuteSql):
         self.clearArgs()
+        self.__setDataTypes()
         execute.__init__(self, "prepared insert statements", db, printText, debug)
+        
+    def __setDataTypes(self):
+        d = {"string": "varchar(255)"}
+        repeats = ["int", "datetime", "date", "boolean"]
+        for r in repeats:
+            d[r] = r
+        self.__dataTypes = d
         
     def clearArgs(self):
         self.__args = {}
         return self
         
-    def __createArgs(self, value, dataTypes, args):
+    def __createArgs(self, value, args):
         f = value.rfind('_')
         if f > -1:
             f = value[f+1:]
-            if f in dataTypes:
-                args[value] = dataTypes[f]
+            if f in self.__dataTypes:
+                args[value] = self.__dataTypes[f]
         return args
         
     def addMethod(self, index):
         a = self.__args
         keys = tuple(a.keys())
         values, args, setStatements = ([], {}, {})
-        dataTypes = {"string": "varchar(255)", "int": "int"}
         if "id" in keys:
             setStatements["id"] = "0"
         for i in list(a.values()):
@@ -618,10 +755,8 @@ class PreparedInsertStatements(ExecuteSql):
                 setStatements["id"] = v
             else:
                 if not v in setStatements:
-                    args = self.__createArgs(v, dataTypes, args)
+                    args = self.__createArgs(v, args)
                     setStatements[v] = v
-        if "datetime1" in keys:
-            setStatements["arg1_datetime"] = "now()"
         name = "_".join(keys).replace("id_id", "id")
         prepStatement = "concat('insert into ', table_name, ' values (', get_table_column_questions(table_name), ')')"
         self.clearArgs()
@@ -665,53 +800,70 @@ class PreparedInsertStatements(ExecuteSql):
 class PreparedUpdateStatements(ExecuteSql):
     def __init__(self, db = None, printText = True, debug = False, execute = ExecuteSql):
         self.clearArgs()
+        self.__whereExists = False
+        self.__setWhatCount = 0
+        self.__setDataTypes()
         execute.__init__(self, "prepared update statements", db, printText, debug)
      
+    def __setDataTypes(self):
+        d = {"what": "varchar(255)", "string": "varchar(255)"}
+        repeats = ["int", "datetime", "date", "boolean"]
+        for r in repeats:
+            d[r] = r
+        self.__dataTypes = d
+        
     def clearArgs(self):
         self.__args = {}
         return self
     
-    def __addArg(self, action, arg, count = 1):
+    def addMethod(self, index):
+        a = self.__args
+        keys = list(a.keys())
+        values, args, setStatements = ([], {}, {})
+        for i in list(a.values()):
+            values += i
+        for v in values:
+            args = self.__createArgs(v, args)
+            if self.checkString(v, "what", False, True):
+                setStatements[v] = v
+        if self.__whereExists:
+            keys = ["set"] + keys[:-1] + ["where"] + keys[-1:]
+        else:
+            keys = ["set"] + keys
+        name = "_".join(keys)
+        getSets = ["{}, '=?".format(s)+"'" for s in args if self.checkString(s, "set") and self.checkString(s, "what", isEnd=True)]
+        isWhere = ", ' where ', where1_what, '=?'" if self.__whereExists else ""
+        prepStatement = "concat('update ', table_name, ' set ', {}{})".format(", ".join(getSets), isWhere)
+        self.clearArgs()
+        self.__whereExists = False
+        self.__setWhatCount = 0
+        return self.createPreparedStatement("update_"+name, args, prepStatement, setStatements, index)
+    
+    def __addArg(self, action, arg, whatCount, count = 1):
         args = []
         for c in range(count):
             c += 1
-            args.append("{}{}_what".format(action, c))
+            args.append("{}{}_what".format(action, whatCount))
             args.append("{}{}_{}".format(action, c, arg))
         self.__args["{}{}".format(arg, count)] = args
         return self
         
     def addSetArg(self, arg, count = 1):
-        return self.__addArg("set", arg, count)
+        self.__setWhatCount += 1
+        return self.__addArg("set", arg, self.__setWhatCount, count)
     
-    def __createArgs(self, value, dataTypes, args):
+    def __createArgs(self, value, args):
         f = value.rfind('_')
         if f > -1:
             f = value[f+1:]
-            if f in dataTypes:
-                args[value] = dataTypes[f]
+            if f in self.__dataTypes:
+                args[value] = self.__dataTypes[f]
         return args
         
-    def addWhereArg(self, index, arg = "int"):
-        self.__addArg("where", arg, 1)
-        a = self.__args
-        keys = list(a.keys())
-        values, args, setStatements = ([], {}, {})
-        dataTypes = {"what": "varchar(255)", "string": "varchar(255)", "int": "int"}
-        for i in list(a.values()):
-            values += i
-        for v in values:
-            if self.checkString(v, "datetime", isEnd=True):
-                setStatements[v] = "now()"
-            else:
-                args = self.__createArgs(v, dataTypes, args)
-                if self.checkString(v, "what", False, True):
-                    setStatements[v] = v
-        keys = ["set"] + keys[:-1] + ["where"] + keys[-1:]
-        name = "_".join(keys)
-        getSets = ["{}, '=?".format(s)+"'" for s in args if self.checkString(s, "set") and self.checkString(s, "what", isEnd=True)]
-        prepStatement = "concat('update ', table_name, ' set ', {}, ' where ', where1_what, '=?')".format(", ".join(getSets))
-        self.clearArgs()
-        return self.createPreparedStatement("update_"+name, args, prepStatement, setStatements, index)
+    def addWhereArg(self, arg = "int"):
+        if not self.__whereExists:
+            self.__whereExists = True
+        return self.__addArg("where", arg, 1, 1)
           
     def removeArgs(self, *args):
         for a in args:
@@ -725,7 +877,13 @@ class PreparedUpdateStatements(ExecuteSql):
 class PreparedDeleteStatements(ExecuteSql):
     def __init__(self, db = None, printText = True, debug = False, execute = ExecuteSql):
         execute.__init__(self, "prepared delete statements", db, printText, debug)
-        
+    
+    def execute(self, i=1):
+        prepStatement = "concat('delete from ', table_name, ' where ', table_name, '_id=?')"
+        args = {"table_id":"int"}
+        setStatements = {"table_id":"table_id"}
+        return self.createPreparedStatement("delete_table_id", args, prepStatement, setStatements, i)
+    
 class AddSql(ExecuteSql):
     def __init__(self, db = None, printText = True, debug = False, execute = ExecuteSql):
         execute.__init__(self, "adds", db, printText, debug)
@@ -812,7 +970,7 @@ class QtWorkbenchSql(ParentWindow):
                 def testConnection(self, isAccess = False):
                     comboBox = self.comboBox
                     group, access, _ = comboBox.items[comboBox.currentText()]                    
-                    results = group.searchObjects(SearchForm().searchClasses(TextBox)).mergeResults().resultValues().results
+                    results = group.searchObjects(SearchForm().searchClasses(LineBox)).mergeResults().resultValues().results
                     keys = tuple(results.keys())
                     for r in keys:
                         if "schema" in r:
@@ -856,8 +1014,8 @@ class QtWorkbenchSql(ParentWindow):
                     c.close()
                     return create
                     
-                def mouseLeftReleased(self):
-                    Button.mouseLeftReleased(self)
+                def mouseLeftReleased(self, QMouseEvent):
+                    Button.mouseLeftReleased(self, QMouseEvent)
                     test = self.testConnection()
                     message = self.setupConn.setMessage
                     if type(test) is dict:
@@ -878,8 +1036,8 @@ class QtWorkbenchSql(ParentWindow):
                     super().__init__(*text)
                     self.setupConn = setupConn
                     
-                def mouseLeftReleased(self):
-                    Button.mouseLeftReleased(self)
+                def mouseLeftReleased(self, QMouseEvent):
+                    Button.mouseLeftReleased(self, QMouseEvent)
                     self.setupConn.close()
                     
             class Ok(Button):
@@ -888,8 +1046,8 @@ class QtWorkbenchSql(ParentWindow):
                     self.setupConn = setupConn
                     self.scrollForm = scrollForm
                     
-                def mouseLeftReleased(self):
-                    Button.mouseLeftReleased(self)
+                def mouseLeftReleased(self, QMouseEvent):
+                    Button.mouseLeftReleased(self, QMouseEvent)
                     search = SearchForm().searchNames("test")
                     test = self.setupConn.searchObjects(search).mergeResults().results["test"]
                     results = test.testConnection(True)
@@ -911,23 +1069,23 @@ class QtWorkbenchSql(ParentWindow):
                 self.mainWindow.setEnabled(False)
                 g = Form()
                 g.setFont(self.getFont())
-                g.addTextBox("127.0.0.1", "Host name:", False).addRow()
-                g.addTextBox("root", "Username:", False).addRow()
+                g.addLineBox("127.0.0.1", "Host name:", False).addRow()
+                g.addLineBox("root", "Username:", False).addRow()
                 g.addPassword().addRow()
-                g.addTextBox(message="Enter default schema name (Optional)").addRow() 
+                g.addLineBox(message="Enter default schema name (Optional)").addRow() 
                 self.standard = g.group() 
                 g = Form()
                 g.setFont(self.getFont())
-                g.addTextBox("127.0.0.1", "SSH Host name:", False).addRow()
-                g.addTextBox("user", "SSH Username:", False).addRow()
+                g.addLineBox("127.0.0.1", "SSH Host name:", False).addRow()
+                g.addLineBox("user", "SSH Username:", False).addRow()
                 g.addPassword(message="SSH").addRow()
-                g.addTextBox("root", "MySql Username:", False).addRow()
+                g.addLineBox("root", "MySql Username:", False).addRow()
                 g.addPassword(message="MySql").addRow()
-                g.addTextBox(message="Enter MySql default schema name (Optional)").addRow()
+                g.addLineBox(message="Enter MySql default schema name (Optional)").addRow()
                 self.standardSSH = g.group()
                 f = Form(self)
                 f.setFont(self.getFont())
-                f.addTextBox(message="Enter a connection name").addRow()
+                f.addLineBox(message="Enter a connection name").addRow()
                 f.addLabel("Connection method:")
                 c = self.Combo(self)
                 f.addComboBox(c).addRow()
@@ -953,7 +1111,7 @@ class QtWorkbenchSql(ParentWindow):
                 self.childForm = f
                 self.childForm.layout()
                 
-            def searchObjects(self, searchForm):
+            def searchObjects(self, searchForm  = None):
                 return self.childForm.searchObjects(searchForm)
             
             def setMessage(self, text, icon = "", iconBackground = None):
@@ -972,8 +1130,8 @@ class QtWorkbenchSql(ParentWindow):
             self.mainWindow = mainWindow
             self.scrollForm = scrollForm
                              
-        def mouseLeftReleased(self):
-            Button.mouseLeftReleased(self)
+        def mouseLeftReleased(self, QMouseEvent):
+            Button.mouseLeftReleased(self, QMouseEvent)
             if not self.mainWindow is None:
                 self.mainWindow.setChildWindows(self.SetupConnection(self))
 #                 results = {"name": "connect name", "user": "some user", "host": "a host", "connect": "connect"}
@@ -984,24 +1142,41 @@ class QtWorkbenchSql(ParentWindow):
             super().__init__(*text)
                   
     class _ScrollForm(Form):           
-        class Connect(ScrollChildButton):
+        class Connect(ScrollButton):
             def __init__(self, index, *text):
+                self.isMoved = False
                 super().__init__(index, *text)
                 self.setFixedSize(300, 125)
                 self.setConnection(None)
                 
             def setConnection(self, connect):
                 self.connect = connect
+                    
+            def checkScrollArea(self):
+                return not self.getScrollArea() is None
                 
-            def mouseLeftReleased(self):
-                ScrollChildButton.mouseLeftReleased(self)
-                print(self.connect)
+            def mouseMove(self, QMouseEvent):
+                if self.checkScrollArea():
+                    self.getScrollArea().mouseMoveEvent(QMouseEvent)
+                
+            def mouseLeftPressed(self, QMouseEvent):
+                ScrollButton.mouseLeftPressed(self, QMouseEvent)
+                if self.checkScrollArea():
+                    self.getScrollArea().mouseLeftPressed(QMouseEvent)
+                 
+            def mouseLeftReleased(self, QMouseEvent):
+                s = self.startPosition
+                ScrollButton.mouseLeftReleased(self, QMouseEvent)
+                if s == QMouseEvent.pos():
+                    print(self.connect)
+                if self.checkScrollArea():
+                    self.getScrollArea().mouseLeftReleased(QMouseEvent)
                     
         def __init__(self):
             self.index = 1
             super().__init__()
             self.connectionNames = []
-            self.isAddingItems(True).setRowSize(6)
+            self.setAddingItems(True).setColumnSize(6)
                         
         def addConnection(self, results):
             self.addButton(self.connection(results))
@@ -1020,7 +1195,7 @@ class QtWorkbenchSql(ParentWindow):
             host.setFixedSize(width, 25)
             c = self.Connect(self.index, name, user, host, ButtonText(attribute="space"))
             self.index += 1
-            c.addBoxLayoutToGrid(BoxLayout(BoxLayout.ALIGN_VERTICAL, "name", "space", "user", "host"), Qt.AlignCenter)  
+            c.addBoxLayoutToGrid(BoxLayout(Qt.Vertical, "name", "space", "user", "host"), Qt.AlignCenter)  
             c.setConnection(results["connect"])
             return c
                  
@@ -1053,7 +1228,10 @@ class QtWorkbenchSql(ParentWindow):
         vbox = QVBoxLayout(self)
         vbox.addLayout(self.__titleForm.layout())
         self.__scrollForm = self._ScrollForm()
-        vbox.addWidget(ScrollArea(self.__scrollForm.group()))
+        scroll = ScrollArea(self.__scrollForm.group())
+        scroll.setDraggable(True)
+        #scroll.setScrollBarVisibility(False)
+        vbox.addWidget(scroll)
          
     def changeEvent(self, QEvent):
         ParentWindow.changeEvent(self, QEvent)
