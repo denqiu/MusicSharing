@@ -330,7 +330,7 @@ class PySql:
         except con.Error as e:
             self.results = (self.__checkError(e.msg), None, None)
         return self
-    
+        
     def callFunction(self, query, *args):
         try:
             self.__function = True
@@ -827,10 +827,9 @@ class PreparedUpdateStatements(ExecuteSql):
             if self.checkString(v, "what", False, True):
                 setStatements[v] = v
         if self.__whereExists:
-            keys = ["set"] + keys[:-1] + ["where"] + keys[-1:]
+            name = "_".join(keys).replace("set", "set_").replace("where", "where_")
         else:
-            keys = ["set"] + keys
-        name = "_".join(keys)
+            name = keys[0].replace("set", "set_")
         getSets = ["{}, '=?".format(s)+"'" for s in args if self.checkString(s, "set") and self.checkString(s, "what", isEnd=True)]
         isWhere = ", ' where ', where1_what, '=?'" if self.__whereExists else ""
         prepStatement = "concat('update ', table_name, ' set ', {}{})".format(", ".join(getSets), isWhere)
@@ -845,7 +844,7 @@ class PreparedUpdateStatements(ExecuteSql):
             c += 1
             args.append("{}{}_what".format(action, whatCount))
             args.append("{}{}_{}".format(action, c, arg))
-        self.__args["{}{}".format(arg, count)] = args
+        self.__args["{}{}{}".format(action, arg, count)] = args
         return self
         
     def addSetArg(self, arg, count = 1):

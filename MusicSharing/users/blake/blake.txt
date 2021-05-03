@@ -1,6 +1,0 @@
-ssh_host: 192.168.86.184
-ssh_user: blake
-ssh_password: blake
-db_user: blake
-db_password: blake
-database: music_sharing
