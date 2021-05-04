@@ -747,8 +747,8 @@ class ButtonText(QLabel):
             self.__button.mouseReleaseEvent(QMouseEvent)
 
 class BoxLayout:
-    def __init__(self, alignment, *items):
-        self.setLayout(alignment)
+    def __init__(self, orientation, *items):
+        self.setLayout(orientation)
         self.setItems(*items)
         self.setAttribute()
         self.setFont(None)
@@ -774,8 +774,11 @@ class BoxLayout:
     def getAttribute(self):
         return self.__attribute
         
-    def setLayout(self, alignment):
-        self.__layout = {Qt.Vertical: QVBoxLayout, Qt.Horizontal: QHBoxLayout}[alignment]()
+    def setLayout(self, orientation):
+        self.__layout = {Qt.Vertical: QVBoxLayout, Qt.Horizontal: QHBoxLayout}[orientation]()
+        
+    def setAlignment(self, alignment):
+        self.__layout.setAlignment(alignment)
         
     def setItems(self, *items):
         self.__items = list(items)

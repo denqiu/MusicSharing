@@ -309,6 +309,7 @@ class Triggers(TriggerSql, Execute):
         code = WriteSql()
         for c in ("username", "password"):
             code.append(self.codeEmptyCheck(c))
+        code.append("call password_conditions(new.password)")
         index = self.manageTrigger("account", code, index)
         code.clear()
         pas = WriteSql()
