@@ -33,7 +33,7 @@ class Message(MessageBox):
     def setupWindow(self):
         MessageBox.setupWindow(self)
         self.setWindowTitle("CSC 450 Music Sharing")
-        
+         
     def hideEvent(self, QEvent):
         if self.checkParentWindow():
             p = self.getParentWindow()
@@ -41,7 +41,7 @@ class Message(MessageBox):
             self.button.leaveEvent(QEvent)
             p.setFocus()
             self.removeWindow()
-            
+             
     def changeEvent(self, QEvent):
         MessageBox.changeEvent(self, QEvent)
         if self.checkParentWindow():
@@ -50,7 +50,7 @@ class Message(MessageBox):
             search = SearchForm().searchNames("ok")
             ok = p.searchObjects(search).mergeResults().results["ok"]
             self.button = ok
-   
+    
 class AccountWindow(Window):
     class _Ok(Ok):
         def __init__(self, win, music):
@@ -95,10 +95,13 @@ class AccountWindow(Window):
         f.addRow(Qt.AlignCenter)
         self.childForm = f
         self.childForm.layout()
+        
+    def searchObjects(self, searchForm = None):
+        return self.childForm.searchObjects(searchForm)
  
     def texts(self):
         search = SearchForm().searchNames("username", "password")
-        return tuple(self.childForm.searchObjects(search).mergeResults().resultValues().results.values())
+        return tuple(self.searchObjects(search).mergeResults().resultValues().results.values())
 
     def setMessage(self, text, icon = "", iconBackground = None):
         self.setChildWindows(Message(text, icon, iconBackground))
