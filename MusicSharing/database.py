@@ -121,7 +121,7 @@ class Creates(CreateSql, Execute):
         code.setKeys("primary", details).renamePrimaryKey("song_id")
         code.setForeignIds("song", "artist", "genre").deleteCascade().updateCascade()
         code.setKeys("index", "artist_id", "genre_id")
-        return self.createTable(table, code, False, False, index+1)
+        return self.createAndAddToManageColumns(table, code, False, index+1)
 
     def playlists(self, index):
         pid, table, code = self.begin_table("playlist")
@@ -228,7 +228,7 @@ class Gets(GetSql, Execute):
         tables = ("artist", "genre")
         for t in tables:
             col = t+"_name"
-            index = self.getId(t, "name varchar(255)", col, index)
+            index = self.getId(t, "name varchar(255)", col+ " = name", index)
             index = self.get(t, "varchar(255)", col, False, False, index)
         index = self.getId("song", "uid int, song varchar(255)", "user_id = uid and song_name = song", index)
         cols = ("user_id", "song_name")
@@ -287,7 +287,7 @@ class Gets(GetSql, Execute):
         for t in tables:
             code = "return (select user_id from {});".format(t)
             index = self.createFunction("get_{}_user_id".format(t).replace("user_user", "user"), "", "int", code, index)
-            code = "return get_account_username(get_{}_id());".format(t)
+            code = "return get_account_username(get_{}_user_id());".format(t).replace("user_user", "user")
             index = self.createFunction("get_{}_user".format(t).replace("user_user", "user"), "", "varchar(255)", code, index)
         return index
 
@@ -468,7 +468,7 @@ class Adds(AddSql, Execute):
         c.separator = ";\n\t\t\t"
         e = "call set_error(concat('No account exists with user name ', username));"
         code.append("if @user_id > 0 then \n\t\t\t{}\n\t\telse\n\t\t\t{}\n\t\tend if;".format(c, e))
-        args = "in username varchar(255), in song_name varchar(255), in artist_name varchar(255), in genre_name varchar(255), in file varchar(255), in description varchar(255)"
+        args = "in username varchar(255), in song_name varchar(255), in artist_name varchar(255), in genre_name varchar(255), in description varchar(255), in file varchar(255)"
         index = self.createProcedure("add_song", args, code, index)
         code.clear()
         code.append("call insert_id_string1('comment', comment)")
@@ -712,17 +712,24 @@ class Start(StartSql, Execute):
         StartSql.__init__(self, db, printText, debug, Execute)
         self.execute()
         
+    def addAccount(self, user):
+        self.db.callProcedure(None, "add_account", user, user+"1")
+        query = "select account_id, username from account where username = %s"
+        self.db.setArgs(user).query(query)
+        time.sleep(1)
+        
+    def addAdmin(self, user):
+        self.db.callProcedure(None, "add_admin", user)
+        query = "select admin_id, get_account_username(user_id) as user from admin where user_id = get_account_id(%s)"
+        self.db.setArgs(user).query(query)
+        
     def execute(self, i=1):
         if not self.isMaintained:
             users = ("Blythe", "Blake", "Dennis", "Gordon", "Aengus")
             for u in users:
-                self.db.callProcedure(None, "add_account", u, u+"1")
-                query = "select account_id, username from account where username = %s"
-                self.db.setArgs(u).query(query)
-                self.db.callProcedure(None, "add_admin", u)
-                query = "select admin_id, get_account_username(user_id) as user from admin where user_id = get_account_id(%s)"
-                self.db.setArgs(u).query(query)
-                time.sleep(1)
+                self.addAccount(u)
+                self.addAdmin(u)
+            self.addAccount("User")
            
 if __name__ == "__main__":
     db = Creates(printText=True, debug=True).db

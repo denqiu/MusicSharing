@@ -187,7 +187,7 @@ class PySql:
                 query = query.replace("!!VALS!!", "").replace("!!INT!!", "")
             else:
                 self.cursor.execute(query, vals)
-            self.db.commit()
+            self.commit()
             for v in vals: query = query.replace("%s", str(v), 1)
             return query
         except con.Error as e:
@@ -321,10 +321,13 @@ class PySql:
         self.setArgs(procedure).query("select * from information_schema.parameters where specific_name = %s")
         return self
     
+    def commit(self):
+        self.db.commit()
+    
     def callProcedure(self, query, procName, *args):
         try:
             self.cursor.callproc(procName, args)
-            self.db.commit()
+            self.commit()
             if not query is None:
                 self.setArgs(*args).query(query)
         except con.Error as e:
