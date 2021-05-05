@@ -279,7 +279,7 @@ class Home(Action):
         songs = self.createQuery("song")
         playlists = self.createQuery("playlist")
         playlists = "{} where get_public_id(playlist_id) > 0".format(playlists)
-        query = "{} union {} order by date".format(songs, playlists)
+        query = "{} union {} order by date desc".format(songs, playlists)
         results = self.music.db.query(query).results[2]
         self.view.createView(results)
        
@@ -335,22 +335,29 @@ class LogOut(Action):
 class Play(Action):
     def __init__(self, music, menu, view, doCurrentClicked):
         self.isOn = False
-        self.audio = False
+        self.curSong = ""
+        self.doSwitchOn = True
         Action.__init__(self, music, menu, view, doCurrentClicked, "play")
        
     def doAction(self, QMouseEvent):
         path = self.view.songName
-        if path != "":
-            self.isOn = not self.isOn
+        if path == "":
+            self.reset()
+        else:
+            if self.doSwitchOn:
+                self.isOn = not self.isOn
+            else:
+                self.doSwitchOn = True
             if self.isOn:
-                if self.audio:
+                if self.curSong == path:
                     mixer.music.unpause()
                 else:
                     mixer.init()
                     mixer.music.load("{}\\songs\\{}".format(os.getcwd(), path))
                     mixer.music.set_volume(0.7)
                     mixer.music.play()
-                    self.audio = True
+                    self.curSong = path
+                pass
             else:
                 self.reset()
                 mixer.music.pause()
@@ -464,23 +471,51 @@ class Menu(Form):
         return names
     
 class ViewCell(ChildButton):
-    def __init__(self, text, music, menu, view, row):
+    def __init__(self, text, index, music, menu, view):
+        self.index = index
         self.music = music
         self.menu = menu
         self.view = view
-        self.row = row
+        self.setCells(None)
+        self.setRow(None)
         buttonText = ButtonText(text, "text")
         ChildButton.__init__(self, buttonText)
         self.addTextToGrid("text", Qt.AlignCenter)
         self.setObjectName(text)
         self.setFixedHeight(40)
+        self.backCol = self.backgroundColor
+        
+    def setCells(self, cells):
+        self.cells = cells
+        
+    def setRow(self, row):
+        self.row = row
+        
+    def executePlay(self, play):
+        play.enter(QMouseEvent)
+        play.mouseLeftReleased(QMouseEvent)
+        play.leave(QMouseEvent)
         
     def mousePressEvent(self, QMouseEvent):
         ChildButton.mousePressEvent(self, QMouseEvent)
+        view = self.view
+        keys = tuple(self.cells.keys())
         if self.objectName() == "Play":
-            what = self.row.getChildren("buttons", "what")
-            #self.view.songName = 
-
+            if keys[-1] == "Song":
+                query = "select song_id, get_song_file(song_id) as file from song where user_id = get_account_id(%s) and song_name = %s"
+                results = self.music.db.setArgs(keys[2], keys[1]).query(query).results[2][0]
+                view.songName = "{}.{}".format(results["song_id"], results["file"][-3:])
+                self.row.backgroundColor = self.clickColor
+                curRow = view.curRow
+                play = self.music.playMusic.buttonNames["play"]
+                if not curRow is None:
+                    if curRow.objectName() != self.row.objectName():
+                        curRow.backgroundColor = self.backCol
+                        curRow.leave(QMouseEvent)
+                        play.doSwitchOn = play.isOn != True
+                self.view.curRow = self.row
+                self.executePlay(play)
+                
 class ViewRow(ScrollButton):
     def __init__(self, index, row, music, menu, view):
         self.row = row
@@ -489,19 +524,26 @@ class ViewRow(ScrollButton):
         self.view = view
         ScrollButton.__init__(self, index)
         self.setObjectName("row{}".format(index))
-        cells = ["Play", row["Name"]]
+        cellNames = ["Play", row["Name"]]
         if "Username" in row:
-            cells += [row["Username"]]
-        cells += [row["What"].capitalize()]
+            cellNames += [row["Username"]]
+        cellNames += [row["What"].capitalize()]
+        cells = {}
+        for c in cellNames:
+            cells[c] = self.createCell(c)
+        self.cells = cells
         for c in cells:
-            self.addChildren(self.createCell(c))
-        boxLayout = BoxLayout(Qt.Horizontal, *cells)
+            c = cells[c]
+            c.setCells(self.cells)
+            c.setRow(self)
+            self.addChildren(c)
+        boxLayout = BoxLayout(Qt.Horizontal, *cellNames)
         self.addBoxLayoutToGrid(boxLayout)
         self.clickColor = None
         self.hoverColor = Qt.gray
        
     def createCell(self, text):
-        return ViewCell(text, self.music, self.menu, self.view, self)
+        return ViewCell(text, self.index, self.music, self.menu, self.view)
     
     def getViewScroll(self):
         return self.view.getParent()
@@ -524,6 +566,7 @@ class View(Form):
     def __init__(self, music):
         self.music = music
         self.songName = ""
+        self.curRow = None
         self.index = 1
         Form.__init__(self)
         self.tablelize(True)
@@ -532,7 +575,7 @@ class View(Form):
         
     def createViewRow(self, row):
         return ViewRow(self.index, row, self.music, self.music.menu, self)
-        
+    
     def createView(self, rows):
         self.clearForm()
         self.index = 1
@@ -546,7 +589,7 @@ class ViewScroll(ScrollArea):
         self.music = music
         ScrollArea.__init__(self, view.group())
         self.setDraggable(True)
-        self.setScrollBarVisibility(False, Qt.Horizontal)
+        self.setScrollBarVisibility(False)
         
 class PlayMusic(Form):
     def __init__(self, music, menu, view):
@@ -557,10 +600,12 @@ class PlayMusic(Form):
         buttons = [Previous, Play, Next, Shuffle, Repeat]
         curClick = [False, True, False] + [True]*2
         buttons = list(zip(buttons, curClick))
+        self.buttonNames = {}
         for i, (b, curClick) in enumerate(buttons):
             b = b(music, menu, view, curClick)
             b.setFont(self.getFont(14))
             b.setFixedHeight(40)
+            self.buttonNames[b.objectName()] = b
             buttons[i] = b
         boxLayout = BoxLayout(Qt.Horizontal, *buttons)
         boxLayout.setAlignment(Qt.AlignLeft)
