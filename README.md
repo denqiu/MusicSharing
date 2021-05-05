@@ -1,6 +1,7 @@
 # MusicSharing
 
 # Python Dependencies: pyqt5, sshtunnel, mysql-connector-python, shutil, pygamer
+# Custom Python Dependencies to add to Python path: pySql.py, pyqt5Custom.py
 
 # Database: MySql
 
