@@ -64,10 +64,11 @@ class AccountWindow(Window):
             fields = win.fields()
             query = "select * from account where username = %s and password = %s"
             create_account = win.is_create_account()
+            music = self.music
             if create_account:
-                results = self.music.db.callProcedure(query, "add_account", *fields[:-1]).results
+                results = music.db.callProcedure(query, "add_account", *fields[:-1]).results
             else:
-                results = self.music.db.setArgs(*fields).query(query).results
+                results = music.db.setArgs(*fields).query(query).results
             if results[2] is None:
                 win.setMessage(results[0], Message.WARNING_ICON)
             elif len(results[2]) == 0:
@@ -75,7 +76,8 @@ class AccountWindow(Window):
             else:
                 win.close()
                 if not create_account:
-                    self.music.updateLoggedIn(results[2][0]["username"])
+                    for u in (music.updateLoggedIn, music.updateCurUser):
+                        u(results[2][0]["username"])
 
     def __init__(self, music, button):
         self.music = music
@@ -362,6 +364,11 @@ class Play(Action):
                 self.reset()
                 mixer.music.pause()
        
+    def executePlay(self):
+        self.enter(QMouseEvent)
+        self.mouseLeftReleased(QMouseEvent)
+        self.leave(QMouseEvent)
+        
 class Next(Action):
     def __init__(self, music, menu, view, doCurrentClicked):
         Action.__init__(self, music, menu, view, doCurrentClicked, "next")
@@ -490,16 +497,11 @@ class ViewCell(ChildButton):
         
     def setRow(self, row):
         self.row = row
-        
-    def executePlay(self, play):
-        play.enter(QMouseEvent)
-        play.mouseLeftReleased(QMouseEvent)
-        play.leave(QMouseEvent)
-        
+       
     def mousePressEvent(self, QMouseEvent):
         ChildButton.mousePressEvent(self, QMouseEvent)
         view = self.view
-        keys = tuple(self.cells.keys())
+        keys = list(self.cells.keys())
         if self.objectName() == "Play":
             if keys[-1] == "Song":
                 query = "select song_id, get_song_file(song_id) as file from song where user_id = get_account_id(%s) and song_name = %s"
@@ -507,14 +509,22 @@ class ViewCell(ChildButton):
                 view.songName = "{}.{}".format(results["song_id"], results["file"][-3:])
                 self.row.backgroundColor = self.clickColor
                 curRow = view.curRow
-                play = self.music.playMusic.buttonNames["play"]
+                playMusic = self.music.playMusic
+                play = playMusic.buttonNames["play"]
                 if not curRow is None:
                     if curRow.objectName() != self.row.objectName():
                         curRow.backgroundColor = self.backCol
                         curRow.leave(QMouseEvent)
                         play.doSwitchOn = play.isOn != True
                 self.view.curRow = self.row
-                self.executePlay(play)
+                query = "select get_song_details_artist(%s) as artist"
+                artist = self.music.db.setArgs(results["song_id"]).query(query).results[2][0]["artist"]
+                details = keys[1:3] + [artist]
+                names = ["name", "user", "artist"]
+                details = list(zip(details, names))
+                for (d, n) in details:
+                    playMusic.details[n].setText("{}: {}".format(n.capitalize(), d))
+                play.executePlay()
                 
 class ViewRow(ScrollButton):
     def __init__(self, index, row, music, menu, view):
@@ -609,7 +619,12 @@ class PlayMusic(Form):
             buttons[i] = b
         boxLayout = BoxLayout(Qt.Horizontal, *buttons)
         boxLayout.setAlignment(Qt.AlignLeft)
-        self.addBoxLayout(boxLayout).addRow()
+        self.addBoxLayout(boxLayout)
+        self.details = {}
+        for d in ("name", "user", "artist"):
+            self.details[d] = ButtonText(d.capitalize()+":", d, "1px solid black")
+            self.addButtonText(font=self.getFont(14), buttonText=self.details[d])
+        self.addRow()
         
 class MusicSharing(ParentWindow):    
     def __init__(self):
@@ -669,6 +684,12 @@ class MusicSharing(ParentWindow):
                 
     def eventFilter(self, QObject, QEvent):
         if self.changeAccess:
+            play = self.playMusic.buttonNames["play"]
+            if play.isOn:
+                play.executePlay()
+            play.curSong = ""
+            self.view.curRow = None
+            self.view.songName = ""
             self.changeAccess = False
             self.menu.changeAccess()
         return ParentWindow.eventFilter(self, QObject, QEvent)
@@ -685,6 +706,9 @@ class MusicSharing(ParentWindow):
     def updateLoggedIn(self, username):
         self.db.callProcedure(None, "update_logged_in", username)
         self.changeAccess = True
+        
+    def updateCurUser(self, username):
+        self.db.callProcedure(None, "update_cur_user", username)
         
     def addSongFile(self, song_id, filePath):
         songDir = "{}\\songs".format(os.getcwd())
