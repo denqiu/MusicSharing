@@ -1,4 +1,4 @@
 host: 127.0.0.1
 user: root
-password: [Enter your password]
+password: Dwade123q2
 database: music_sharing
