@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 from pySql import *
 from pyqt5Custom import *
 from pygame import mixer
