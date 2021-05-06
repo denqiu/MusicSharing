@@ -1,4 +1,11 @@
+<<<<<<< HEAD
 host: 127.0.0.1
 user: root
 password: Dwade123q2
 database: music_sharing
+=======
+host: 127.0.0.1
+user: root
+password: [Enter your password]
+database: music_sharing
+>>>>>>> branch 'master' of git@github.com:denqiu/MusicSharing.git
